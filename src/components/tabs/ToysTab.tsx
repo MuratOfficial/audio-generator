@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { type Clip, playClip } from "@/lib/audio/core";
 import { synthesizeToy, type ToyKind, type ToyParams, TOYS } from "@/lib/audio/toys";
 import { AudioResult } from "../AudioResult";
-import { Button, Card, SectionTitle, Slider } from "../ui";
+import { Button, Card, ChoiceGrid, SectionTitle, Slider } from "../ui";
 
 export function ToysTab() {
   const [p, setP] = useState<ToyParams>({ kind: "xylophone", pitch: 0, length: 1, room: 0.25, seed: 1 });
@@ -28,25 +28,11 @@ export function ToysTab() {
       <div className="grid content-start gap-5">
         <Card>
           <SectionTitle hint="Нажмите на игрушку, чтобы услышать её. «Другой вариант» меняет мелодию и ритм.">Игрушки</SectionTitle>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {TOYS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                onClick={() => play({ ...p, kind: t.id as ToyKind })}
-                className={`flex flex-col items-center gap-2 rounded-3xl px-2 py-4 text-sm font-bold transition active:scale-95 ${
-                  p.kind === t.id ? "bg-accent text-white" : "bg-chip text-ink hover:bg-chip-strong"
-                }`}
-              >
-                <span className="text-3xl leading-none">{t.emoji}</span>
-                <span className="text-center leading-tight">{t.label}</span>
-              </button>
-            ))}
-          </div>
+          <ChoiceGrid large options={TOYS} value={p.kind} onChange={(kind: ToyKind) => play({ ...p, kind })} />
         </Card>
         <Card>
           <div className="mb-4 flex flex-wrap gap-3">
-            <Button onClick={() => clip && playClip(clip)}>▶ Играть</Button>
+            <Button variant="primary" onClick={() => clip && playClip(clip)}>▶ Играть</Button>
             <Button variant="secondary" onClick={() => play({ ...p, seed: p.seed + 1 })}>🎲 Другой вариант</Button>
           </div>
           {clip && <AudioResult clip={clip} name={`игрушка-${label}-${p.seed}`} />}

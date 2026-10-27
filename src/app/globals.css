@@ -1,74 +1,49 @@
 @import "tailwindcss";
-
-:root {
-  --bg: #fff8f0;
-  --card: #ffffff;
-  --well: #fffaf5;
-  --ink: #2b2240;
-  --muted: #7a6f8c;
-  --line: #f0e4d8;
-  --chip: #f6eee6;
-  --chip-strong: #efe2d5;
-  --accent: #7c5cff;
-  --accent-strong: #6544f0;
-  --wave: #cdbfff;
-}
+@import "@toimetdev/pathlogs-tokens/styles/index.css";
+@import "@toimetdev/pathlogs-core/styles/components.css";
+/* Мост к Tailwind — строго последним, иначе утилиты соберутся с пустыми значениями. */
+@import "@toimetdev/pathlogs-tokens/styles/tailwind.css";
 
 @theme inline {
-  --color-bg: var(--bg);
-  --color-card: var(--card);
-  --color-well: var(--well);
-  --color-ink: var(--ink);
-  --color-muted: var(--muted);
-  --color-line: var(--line);
-  --color-chip: var(--chip);
-  --color-chip-strong: var(--chip-strong);
-  --color-accent: var(--accent);
-  --color-accent-strong: var(--accent-strong);
-  --font-sans: var(--font-nunito), system-ui, sans-serif;
-  --shadow-soft: 0 1px 2px rgb(43 34 64 / 0.04), 0 8px 24px -12px rgb(43 34 64 / 0.12);
-}
-
-body {
-  background:
-    radial-gradient(1200px 500px at 10% -10%, #ffe7f1 0%, transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, #e8f3ff 0%, transparent 55%),
-    var(--bg);
-  color: var(--ink);
-  font-family: var(--font-sans);
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
 [hidden] {
   display: none !important;
 }
 
-/* Ползунки */
+/* Ползунки на токенах PathLogs: дорожка — вложенная поверхность, бегунок — акцент. */
 .range {
   appearance: none;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--chip-strong);
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
   outline: none;
+  cursor: pointer;
 }
 .range::-webkit-slider-thumb {
   appearance: none;
-  width: 20px;
-  height: 20px;
-  border-radius: 999px;
-  background: var(--accent);
-  border: 3px solid #fff;
-  box-shadow: 0 1px 4px rgb(43 34 64 / 0.3);
-  cursor: pointer;
-}
-.range::-moz-range-thumb {
   width: 16px;
   height: 16px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--accent);
-  border: 3px solid #fff;
-  box-shadow: 0 1px 4px rgb(43 34 64 / 0.3);
-  cursor: pointer;
+  border: 2px solid var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--duration-fast) ease;
+}
+.range::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+.range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  border: 2px solid var(--surface);
 }
 .range:focus-visible::-webkit-slider-thumb {
-  outline: 3px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

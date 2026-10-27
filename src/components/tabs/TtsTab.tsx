@@ -5,7 +5,7 @@ import type { Clip } from "@/lib/audio/core";
 import { PIPER_VOICES, removeVoice, speakPiper, storedVoices } from "@/lib/tts/piper";
 import { AudioResult } from "../AudioResult";
 import { ChildVoiceControls, useChildVoice } from "../ChildVoiceControls";
-import { Button, Card, Notice, SectionTitle, Segmented, Slider } from "../ui";
+import { Badge, Button, Card, Field, Notice, ProgressBar, SectionTitle, Segmented, Select, Slider, Textarea } from "../ui";
 
 const DEFAULT_TEXT = "Привет! Меня зовут Маша, мне пять лет. Давай играть вместе!";
 
@@ -68,31 +68,40 @@ function NeuralTts() {
         <SectionTitle hint="Нейросеть Piper работает прямо в браузере. Модель голоса скачивается один раз (~60 МБ) и сохраняется.">
           Текст
         </SectionTitle>
-        <textarea
+        <Textarea
+          aria-label="Текст для озвучки"
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={4}
-          className="w-full resize-y rounded-2xl bg-well p-3 text-base text-ink ring-1 ring-line outline-none focus:ring-2 focus:ring-accent"
+          className="resize-y text-base"
         />
-        <div className="mt-4">
+        <div className="mt-5">
           <SectionTitle>Исходный голос</SectionTitle>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {PIPER_VOICES.map((v) => (
-              <button
-                key={v.id}
-                type="button"
-                onClick={() => setVoiceId(v.id)}
-                className={`rounded-2xl px-3 py-2 text-left text-sm font-bold transition ${
-                  v.id === voiceId ? "bg-accent text-white" : "bg-chip text-ink hover:bg-chip-strong"
-                }`}
-              >
-                <span className="block">{v.label}</span>
-                <span className={`block text-xs font-semibold ${v.id === voiceId ? "text-white/80" : "text-muted"}`}>
-                  {v.lang === "ru" ? "русский" : "английский"} · {v.gender === "f" ? "жен." : "муж."}
-                  {stored.includes(v.id) ? " · ✓" : ""}
-                </span>
-              </button>
-            ))}
+            {PIPER_VOICES.map((v) => {
+              const active = v.id === voiceId;
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setVoiceId(v.id)}
+                  className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
+                    active
+                      ? "border-accent/50 bg-accent/12 font-medium text-accent-hover"
+                      : "border-edge bg-surface-2 text-foreground hover:border-accent/30 hover:bg-surface"
+                  }`}
+                >
+                  <span className="flex items-center justify-between gap-1">
+                    {v.label}
+                    {stored.includes(v.id) && <Badge color="#22c55e" tip="Модель уже скачана">✓</Badge>}
+                  </span>
+                  <span className="block text-xs font-normal text-muted">
+                    {v.lang === "ru" ? "русский" : "английский"} · {v.gender === "f" ? "жен." : "муж."}
+                  </span>
+                </button>
+              );
+            })}
           </div>
           <p className="mt-2 text-xs text-muted">
             Для детского голоса лучше подходят женские голоса — их меньше приходится сдвигать.
@@ -100,12 +109,13 @@ function NeuralTts() {
         </div>
 
         <div className="mt-5 flex flex-wrap items-center gap-3">
-          <Button onClick={run} disabled={busy || !text.trim()}>
-            {status.kind === "download" ? "Скачиваю голос…" : status.kind === "synth" ? "Синтезирую…" : "▶ Озвучить"}
+          <Button variant="gradient" onClick={run} loading={busy} disabled={!text.trim()}>
+            {status.kind === "download" ? "Скачиваю голос" : status.kind === "synth" ? "Синтезирую" : "▶ Озвучить"}
           </Button>
           {isStored && !busy && (
             <Button
               variant="ghost"
+              size="sm"
               onClick={async () => {
                 await removeVoice(voiceId);
                 setStored(await storedVoices());
@@ -117,9 +127,7 @@ function NeuralTts() {
         </div>
         {status.kind === "download" && (
           <div className="mt-3">
-            <div className="h-2 overflow-hidden rounded-full bg-chip">
-              <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${Math.round(progress * 100)}%` }} />
-            </div>
+            <ProgressBar value={progress} />
             <p className="mt-1 text-xs text-muted">Загрузка модели: {Math.round(progress * 100)}% из ~{meta.sizeMb} МБ</p>
           </div>
         )}
@@ -196,32 +204,30 @@ function SystemTts() {
       <SectionTitle hint="Голоса операционной системы: мгновенно и без скачивания, но звук нельзя сохранить в файл, а высоту можно только поднять «как есть», без сдвига формант.">
         Системный синтез речи
       </SectionTitle>
-      <textarea
+      <Textarea
+        aria-label="Текст для озвучки"
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={3}
-        className="w-full resize-y rounded-2xl bg-well p-3 text-base text-ink ring-1 ring-line outline-none focus:ring-2 focus:ring-accent"
+        className="resize-y text-base"
       />
-      <div className="mt-4 grid gap-4 sm:grid-cols-3">
-        <label className="block text-sm">
-          <span className="mb-1 block font-semibold text-ink">Голос</span>
-          <select
-            value={voiceUri}
-            onChange={(e) => setVoiceUri(e.target.value)}
-            className="w-full rounded-xl bg-well px-3 py-2 text-ink ring-1 ring-line"
-          >
-            {voices.map((v) => (
-              <option key={v.voiceURI} value={v.voiceURI}>
-                {v.name} ({v.lang})
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="mt-4 grid items-end gap-4 sm:grid-cols-3">
+        <Field label="Голос">
+          {(props) => (
+            <Select {...props} value={voiceUri} onChange={(e) => setVoiceUri(e.target.value)}>
+              {voices.map((v) => (
+                <option key={v.voiceURI} value={v.voiceURI}>
+                  {v.name} ({v.lang})
+                </option>
+              ))}
+            </Select>
+          )}
+        </Field>
         <Slider label="Высота" value={pitch} min={0.5} max={2} onChange={setPitch} />
         <Slider label="Скорость" value={rate} min={0.5} max={1.8} onChange={setRate} />
       </div>
       <div className="mt-5 flex gap-3">
-        <Button onClick={speak}>▶ Сказать</Button>
+        <Button variant="primary" onClick={speak}>▶ Сказать</Button>
         {speaking && (
           <Button variant="secondary" onClick={() => { speechSynthesis.cancel(); setSpeaking(false); }}>
             Стоп

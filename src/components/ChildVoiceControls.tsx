@@ -64,7 +64,7 @@ export function ChildVoiceControls({ voice }: { voice: ReturnType<typeof useChil
         options={CHILD_PRESETS.map((p) => ({ id: p.id, label: p.label, hint: p.hint }))}
         value={presetId}
         onChange={choosePreset}
-        columns="grid-cols-2 sm:grid-cols-3"
+        columns="grid-cols-2 2xl:grid-cols-3"
       />
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <Slider label="Высота голоса" value={params.targetPitch} min={180} max={520} step={1} onChange={(v) => update({ targetPitch: v })} format={(v) => `${Math.round(v)} Гц`} />

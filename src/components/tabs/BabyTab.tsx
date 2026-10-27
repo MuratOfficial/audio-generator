@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { AGES, type BabyAge, type BabyParams, DEFAULT_BABY, synthesizeBaby, VOCALIZATIONS } from "@/lib/audio/babySynth";
 import { type Clip, playClip } from "@/lib/audio/core";
 import { AudioResult } from "../AudioResult";
-import { Button, Card, ChoiceGrid, SectionTitle, Slider } from "../ui";
+import { Button, Card, ChoiceGrid, Field, SectionTitle, Slider, Textarea } from "../ui";
 
 const EXAMPLES = ["Мама, папа! Дай ням-ням. Агу?", "Ой! Ку-ку! Где мама?", "Баба, дай мячик!", "Привет! Я малыш.", "Пока-пока!"];
 
@@ -37,36 +37,40 @@ export function BabyTab() {
           <ChoiceGrid options={VOCALIZATIONS} value={p.vocalization} onChange={(v) => set("vocalization", v)} />
           {p.vocalization === "text" && (
             <div className="mt-4">
-              <textarea
-                value={p.text}
-                onChange={(e) => set("text", e.target.value)}
-                rows={2}
-                className="w-full resize-y rounded-2xl bg-well p-3 text-base font-semibold text-ink ring-1 ring-line outline-none focus:ring-2 focus:ring-accent"
-                placeholder="Напишите простые слова: мама, папа, агу…"
-              />
-              <div className="mt-2 flex flex-wrap gap-2">
+              <Field
+                label="Текст"
+                hint="Лучше всего звучат короткие детские слова. Ударение по умолчанию на первый слог — поставьте «+» после ударной гласной, чтобы изменить: «куку+»."
+              >
+                {(props) => (
+                  <Textarea
+                    {...props}
+                    value={p.text}
+                    onChange={(e) => set("text", e.target.value)}
+                    rows={2}
+                    className="resize-y text-base"
+                    placeholder="Напишите простые слова: мама, папа, агу…"
+                  />
+                )}
+              </Field>
+              <div className="mt-3 flex flex-wrap gap-1.5">
                 {EXAMPLES.map((ex) => (
                   <button
                     key={ex}
                     type="button"
                     onClick={() => set("text", ex)}
-                    className="rounded-full bg-chip px-3 py-1 text-xs font-bold text-muted hover:bg-chip-strong hover:text-ink"
+                    className="rounded-full border border-edge bg-surface-2 px-2.5 py-1 text-xs text-muted transition hover:border-accent/40 hover:text-foreground"
                   >
                     {ex}
                   </button>
                 ))}
               </div>
-              <p className="mt-2 text-xs text-muted">
-                Лучше всего звучат короткие детские слова. Ударение по умолчанию на первый слог — поставьте «+» после
-                ударной гласной, чтобы изменить: «куку+».
-              </p>
             </div>
           )}
         </Card>
 
         <Card>
           <div className="mb-4 flex flex-wrap items-center gap-3">
-            <Button onClick={() => generate(p, true)}>▶ Озвучить</Button>
+            <Button variant="gradient" onClick={() => generate(p, true)}>▶ Озвучить</Button>
             <Button variant="secondary" onClick={() => setP((prev) => ({ ...prev, seed: prev.seed + 1 }))} title="Новый вариант интонации и ритма">
               🎲 Другой вариант
             </Button>

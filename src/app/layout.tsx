@@ -1,9 +1,15 @@
 import type { Metadata } from "next";
-import { Nunito } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
+import { themeScript } from "@toimetdev/pathlogs-tokens";
 import "./globals.css";
 
-const nunito = Nunito({
-  variable: "--font-nunito",
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin", "cyrillic"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
   subsets: ["latin", "cyrillic"],
 });
 
@@ -14,7 +20,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="ru" className={`${nunito.variable} h-full antialiased`}>
+    // Атрибут data-theme ставит themeScript до гидратации — отсюда suppressHydrationWarning.
+    <html lang="ru" suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript() }} />
+      </head>
       <body className="min-h-full">{children}</body>
     </html>
   );

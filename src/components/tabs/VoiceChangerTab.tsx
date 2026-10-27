@@ -72,11 +72,11 @@ export function VoiceChangerTab() {
         </SectionTitle>
         <div className="flex flex-wrap items-center gap-3">
           {recording ? (
-            <Button onClick={stopRecording} className="bg-red-500 hover:bg-red-600">
+            <Button variant="danger" onClick={stopRecording}>
               <span className="size-2.5 animate-pulse rounded-full bg-white" /> Стоп · {elapsed.toFixed(1)} с
             </Button>
           ) : (
-            <Button onClick={startRecording}>🎙 Записать с микрофона</Button>
+            <Button variant="gradient" onClick={startRecording}>🎙 Записать с микрофона</Button>
           )}
           <Button variant="secondary" onClick={() => fileInput.current?.click()} disabled={recording}>
             📁 Загрузить файл

@@ -2,7 +2,8 @@
 
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { audioContext, type Clip, downloadClip, duration, playClip, stopPlayback } from "@/lib/audio/core";
-import { Button } from "./ui";
+import { useTheme } from "@toimetdev/pathlogs-hooks";
+import { Badge, Button, PageHint } from "./ui";
 
 // ---------- Коллекция сгенерированных звуков (только в памяти вкладки) ----------
 
@@ -56,6 +57,7 @@ function usePlayer(clip: Clip | null) {
 function Waveform({ clip, startAt, height = 72 }: { clip: Clip; startAt: number | null; height?: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const { resolved: theme } = useTheme();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -73,9 +75,10 @@ function Waveform({ clip, startAt, height = 72 }: { clip: Clip; startAt: number 
       const g = canvas.getContext("2d")!;
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       g.clearRect(0, 0, w, height);
+      // Цвета берутся из токенов PathLogs, поэтому волна следует теме.
       const style = getComputedStyle(canvas);
-      const base = style.getPropertyValue("--wave").trim() || "#c7b8f5";
-      const played = style.getPropertyValue("--accent").trim() || "#7c5cff";
+      const base = style.getPropertyValue("--muted").trim() || "#8a94ab";
+      const played = style.getPropertyValue("--accent").trim() || "#6366f1";
       const x = clip.samples;
       const per = Math.max(1, Math.floor(x.length / w));
       let progress = -1;
@@ -91,7 +94,9 @@ function Waveform({ clip, startAt, height = 72 }: { clip: Clip; startAt: number 
           if (x[i] < lo) lo = x[i];
           if (x[i] > hi) hi = x[i];
         }
-        g.fillStyle = progress >= 0 && px / w <= progress ? played : base;
+        const isPlayed = progress >= 0 && px / w <= progress;
+        g.fillStyle = isPlayed ? played : base;
+        g.globalAlpha = isPlayed ? 1 : 0.55;
         const top = mid - hi * mid * 0.95;
         g.fillRect(px, top, 1, Math.max(1, (hi - lo) * mid * 0.95));
       }
@@ -104,7 +109,7 @@ function Waveform({ clip, startAt, height = 72 }: { clip: Clip; startAt: number 
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [clip, startAt, height]);
+  }, [clip, startAt, height, theme]);
 
   return (
     <div ref={wrapRef} className="w-full">
@@ -130,14 +135,16 @@ export function AudioResult({
   const saved = savedClip === clip;
 
   return (
-    <div className="rounded-2xl bg-well p-3 ring-1 ring-line">
-      {label && <div className="mb-2 text-xs font-extrabold uppercase tracking-wide text-muted">{label}</div>}
+    <div className="rounded-lg border border-edge bg-surface-2 p-3">
+      {label && <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">{label}</div>}
       <div className="flex items-center gap-3">
         <button
           type="button"
           onClick={toggle}
           aria-label={playing ? "Стоп" : "Играть"}
-          className="grid size-12 shrink-0 place-items-center rounded-full bg-accent text-white shadow-sm transition hover:bg-accent-strong active:scale-95"
+          className={`grid shrink-0 place-items-center rounded-full bg-accent text-accent-foreground shadow-[var(--shadow-accent)] transition hover:bg-accent-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:scale-95 ${
+            compact ? "size-9" : "size-11"
+          }`}
         >
           {playing ? (
             <svg viewBox="0 0 24 24" className="size-5" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
@@ -150,10 +157,11 @@ export function AudioResult({
         </div>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <span className="mr-auto text-xs tabular-nums text-muted">{duration(clip).toFixed(2)} с · {clip.sampleRate} Гц</span>
+        <span className="mr-auto font-mono text-xs tabular-nums text-muted">{duration(clip).toFixed(2)} с · {clip.sampleRate} Гц</span>
         {library && !compact && (
           <Button
             variant="ghost"
+            size="sm"
             disabled={saved}
             onClick={() => {
               library.add(name, clip);
@@ -163,7 +171,7 @@ export function AudioResult({
             {saved ? "✓ В коллекции" : "☆ В коллекцию"}
           </Button>
         )}
-        <Button variant="secondary" onClick={() => downloadClip(clip, name)}>
+        <Button variant="secondary" size="sm" onClick={() => downloadClip(clip, name)}>
           ⬇ WAV
         </Button>
       </div>
@@ -175,17 +183,20 @@ export function Library() {
   const { items, remove } = useLibrary();
   if (!items.length) return null;
   return (
-    <section className="mt-8">
-      <h2 className="mb-3 text-lg font-extrabold text-ink">Моя коллекция</h2>
-      <p className="mb-3 text-sm text-muted">Хранится только до закрытия вкладки — скачайте то, что понравилось.</p>
-      <div className="grid gap-3 sm:grid-cols-2">
+    <section className="mt-10">
+      <div className="mb-3 flex items-center gap-2">
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">Моя коллекция</h2>
+        <Badge color="#6366f1">{items.length}</Badge>
+      </div>
+      <PageHint>Хранится только до закрытия вкладки — скачайте то, что понравилось.</PageHint>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
         {items.map((item) => (
-          <div key={item.id} className="relative">
-            <div className="mb-1 flex items-center justify-between px-1">
-              <span className="truncate text-sm font-bold text-ink">{item.name}</span>
-              <button type="button" onClick={() => remove(item.id)} className="text-xs font-bold text-muted hover:text-ink">
+          <div key={item.id}>
+            <div className="mb-1 flex items-center justify-between gap-2 px-1">
+              <span className="truncate text-sm font-medium text-foreground">{item.name}</span>
+              <Button variant="ghost" size="sm" onClick={() => remove(item.id)}>
                 Удалить
-              </button>
+              </Button>
             </div>
             <AudioResult clip={item.clip} name={item.name} compact />
           </div>

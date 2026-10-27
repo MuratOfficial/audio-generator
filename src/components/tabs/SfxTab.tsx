@@ -15,7 +15,7 @@ import {
   WAVE_LABELS,
 } from "@/lib/audio/sfxr";
 import { AudioResult } from "../AudioResult";
-import { Button, Card, SectionTitle, Segmented, Slider } from "../ui";
+import { Button, Card, ChoiceGrid, SectionTitle, Segmented, Slider } from "../ui";
 
 export function SfxTab() {
   const [params, setParams] = useState<SfxrParams>(() => generatePreset("coin", rng(7)));
@@ -40,24 +40,16 @@ export function SfxTab() {
       <div className="grid content-start gap-5">
         <Card>
           <SectionTitle hint="Каждое нажатие создаёт новый случайный звук выбранного типа (алгоритм sfxr).">Игровые звуки</SectionTitle>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {SFXR_PRESETS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => {
-                  setLast(p.id);
-                  apply(generatePreset(p.id));
-                }}
-                className={`flex flex-col items-center gap-1 rounded-2xl px-2 py-3 text-sm font-bold transition active:scale-95 ${
-                  last === p.id ? "bg-accent text-white" : "bg-chip text-ink hover:bg-chip-strong"
-                }`}
-              >
-                <span className="text-2xl leading-none">{p.emoji}</span>
-                {p.label}
-              </button>
-            ))}
-          </div>
+          {/* Повторное нажатие на тот же тип — новый случайный звук этого типа. */}
+          <ChoiceGrid
+            large
+            options={SFXR_PRESETS}
+            value={last}
+            onChange={(id) => {
+              setLast(id);
+              apply(generatePreset(id));
+            }}
+          />
           <div className="mt-4 flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => apply(mutate(params))}>🧬 Мутировать</Button>
             <Button variant="secondary" onClick={() => clip && playClip(clip)}>▶ Повторить</Button>
