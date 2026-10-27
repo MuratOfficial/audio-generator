@@ -29,8 +29,14 @@ const VOWELS: Record<string, Formants> = {
   i: [400, 3000, 3800],
   e: [620, 2450, 3500],
   y: [450, 1850, 3200],
+  // Редуцированные безударные: нейтральный «ə» и «ь» (молоко → м[ə]л[а]ко́, лиса → л[ɪ]са́).
+  "@": [650, 1500, 3200],
+  I: [440, 2550, 3450],
+  // Хмыканье с закрытым ртом («хм-хм») — звук идёт через нос.
+  M: [300, 1250, 2600],
 };
-const VOWEL_BW: Formants = [90, 120, 180];
+// У детей полосы формант шире, чем у взрослых; узкие полосы при высоком тоне «звенят».
+const VOWEL_BW: Formants = [110, 150, 230];
 
 type PhoneDef =
   | { kind: "vowel"; F: Formants }
@@ -47,6 +53,9 @@ const PHONES: Record<string, PhoneDef> = {
   i: { kind: "vowel", F: VOWELS.i },
   e: { kind: "vowel", F: VOWELS.e },
   y: { kind: "vowel", F: VOWELS.y },
+  "@": { kind: "vowel", F: VOWELS["@"] },
+  I: { kind: "vowel", F: VOWELS.I },
+  M: { kind: "vowel", F: VOWELS.M },
   m: { kind: "nasal", F: [280, 1100, 2600], dur: 0.075 },
   n: { kind: "nasal", F: [280, 1700, 2700], dur: 0.07 },
   b: { kind: "stop", voiced: true, F: [320, 900, 2400], noiseF: 900, dur: 0.05 },
@@ -79,8 +88,13 @@ export type Syl = {
   f0: number[];
   dur?: number; // множитель длительности гласной
   amp?: number;
+  breathy?: number; // 0–1: голос с выдохом, как в смехе
+  creak?: number; // 0–1: сиплость (скрип связок) в конце выдоха
+  env?: Env;
 };
-type Ev = Syl | { type: "pause"; dur: number } | { type: "breath"; dur: number; amp: number; vowel: string };
+// decay — резкая атака и быстрое затухание (слог смеха), rise — нарастание (судорожный вдох).
+type Env = "decay" | "rise";
+type Ev = Syl | { type: "pause"; dur: number } | { type: "breath"; dur: number; amp: number; vowel: string; env?: Env };
 
 type Seg = {
   t0: number;
@@ -93,13 +107,24 @@ type Seg = {
   noiseF: number;
   noiseQ: number;
   tau: number;
+  vowel?: boolean; // гласная: внутри неё живёт огибающая громкости
+  final?: boolean; // последняя гласная перед паузой: голос затухает с придыханием
+  breathy: number;
+  creak: number;
+  env?: Env;
 };
 
-type Plan = { segs: Seg[]; f0: [number, number][]; total: number };
+type Plan = { segs: Seg[]; f0: [number, number][]; total: number; base: number };
 
 const VOWEL_BASE_DUR = 0.15;
 
-function buildPlan(events: Ev[], baseF0: number, tempo: number, expr: number): Plan {
+// Мягкий согласный помечается апострофом: «д'» в «дядя».
+const SOFT = "'";
+const baseOf = (p: string) => (p.endsWith(SOFT) ? p.slice(0, -1) : p);
+const phoneDef = (p: string): PhoneDef | undefined => PHONES[baseOf(p)];
+const VOICELESS = new Set(["p", "t", "k", "f", "s", "sh", "x"]);
+
+function buildPlan(events: Ev[], baseF0: number, tempo: number, expr: number, rand: () => number, timingJitter: number): Plan {
   const segs: Seg[] = [];
   const f0: [number, number][] = [];
   let t = 0.03;
@@ -108,74 +133,95 @@ function buildPlan(events: Ev[], baseF0: number, tempo: number, expr: number): P
     t += dur;
   };
   const silent = (F: Formants): Omit<Seg, "t0" | "t1"> => ({
-    F, bw: VOWEL_BW, voice: 0, asp: 0, noise: 0, noiseF: 1000, noiseQ: 1, tau: 0.03,
+    F, bw: VOWEL_BW, voice: 0, asp: 0, noise: 0, noiseF: 1000, noiseQ: 1, tau: 0.03, breathy: 0, creak: 0,
   });
   const lastF = () => (segs.length ? segs[segs.length - 1].F : VOWELS.a);
+  // Живая речь не бывает метрономом: каждый звук чуть длиннее или короче.
+  const dur = (x: number) => (x / tempo) * Math.max(0.75, Math.min(1.3, 1 + timingJitter * gauss(rand)));
+  // Мягкий согласный тянет F2/F3 вверх, к «и», — гласная после него начинается с призвука «й».
+  const soften = (F: Formants, soft: boolean): Formants =>
+    soft ? [F[0] * 0.9, Math.max(F[1], 2150), Math.max(F[2], 3000)] : F;
 
-  for (const ev of events) {
+  events.forEach((ev, ei) => {
     if (ev.type === "pause") {
       push(ev.dur / tempo, silent(lastF()));
-      continue;
+      return;
     }
     if (ev.type === "breath") {
       const F = VOWELS[ev.vowel] ?? VOWELS.a;
-      push(ev.dur / tempo, { ...silent(F), asp: ev.amp, bw: [200, 250, 300] });
-      continue;
+      push(ev.dur / tempo, { ...silent(F), asp: ev.amp, bw: [200, 250, 300], env: ev.env });
+      return;
     }
     const amp = ev.amp ?? 1;
-    const vowelIdx = ev.phones.findIndex((p) => PHONES[p]?.kind === "vowel");
+    const next = events[ei + 1];
+    const final = !next || next.type === "breath" || (next.type === "pause" && next.dur >= 0.1);
+    const vowelIdx = ev.phones.findIndex((p) => phoneDef(p)?.kind === "vowel");
     const nextVowelF = (from: number) => {
       for (let k = from; k < ev.phones.length; k++) {
-        const d = PHONES[ev.phones[k]];
+        const d = phoneDef(ev.phones[k]);
         if (d?.kind === "vowel") return d.F;
       }
       return lastF();
     };
+    // Микропросодия: после глухого согласного тон начинается чуть выше, после звонкого — ниже.
+    let onset = 1;
 
     ev.phones.forEach((ph, k) => {
-      const d = PHONES[ph];
+      const d = phoneDef(ph);
       if (!d) return;
-      const dur = (x: number) => x / tempo;
+      const soft = ph.endsWith(SOFT);
       switch (d.kind) {
         case "vowel": {
           const vd = dur(VOWEL_BASE_DUR * (ev.dur ?? 1));
           const n = ev.f0.length;
           for (let q = 0; q < n; q++) {
-            const m = 1 + (ev.f0[q] - 1) * expr;
+            const m = (1 + (ev.f0[q] - 1) * expr) * (q === 0 ? onset : 1);
             f0.push([t + (n === 1 ? vd / 2 : (vd * q) / (n - 1)), baseF0 * m]);
           }
-          push(vd, { ...silent(d.F), voice: amp, tau: 0.035 });
+          // Одна и та же гласная никогда не звучит дважды одинаково.
+          const F = d.F.map((f) => f * (1 + 0.025 * gauss(rand))) as Formants;
+          push(vd, {
+            ...silent(F), voice: amp, tau: 0.035, vowel: true, final,
+            breathy: ev.breathy ?? 0, creak: ev.creak ?? 0, env: ev.env,
+          });
           break;
         }
         case "nasal":
-          push(dur(d.dur), { ...silent(d.F), bw: [180, 300, 350], voice: 0.3 * amp, tau: 0.015 });
+          push(dur(d.dur), { ...silent(soften(d.F, soft)), bw: [180, 300, 350], voice: 0.3 * amp, tau: 0.015 });
+          onset = 0.98;
           break;
         case "approx":
-          push(dur(d.dur), { ...silent(d.F), voice: d.amp * amp, tau: 0.02 });
+          push(dur(d.dur), { ...silent(soften(d.F, soft)), voice: d.amp * amp, tau: 0.02 });
+          onset = 0.98;
           break;
         case "fric":
           push(dur(d.dur), {
-            ...silent(d.F), voice: d.voiced ? 0.25 * amp : 0, noise: d.amp * amp,
-            noiseF: d.noiseF, noiseQ: d.noiseQ, tau: 0.02,
+            ...silent(soften(d.F, soft)), voice: d.voiced ? 0.25 * amp : 0, noise: d.amp * amp,
+            noiseF: d.noiseF * (soft ? 1.12 : 1), noiseQ: d.noiseQ, tau: 0.02,
           });
+          onset = d.voiced ? 0.96 : 1.05;
           break;
         case "asp":
-          push(dur(d.dur), { ...silent(nextVowelF(k)), asp: 0.55 * amp, bw: [150, 200, 250], tau: 0.01 });
+          // В смехе «х» короче и сливается с гласной.
+          push(dur(d.dur * (ev.breathy ? 0.65 : 1)), { ...silent(nextVowelF(k)), asp: 0.55 * amp, bw: [150, 200, 250], tau: 0.01 });
+          onset = 1.03;
           break;
         case "stop": {
           const v = nextVowelF(k);
-          push(dur(d.dur), { ...silent(d.F), voice: d.voiced ? 0.06 : 0, tau: 0.012 });
-          push(0.012, { ...silent(d.F), noise: 0.7 * amp, noiseF: d.noiseF, noiseQ: 1.2, tau: 0.012 });
-          if (!d.voiced) push(dur(0.035), { ...silent(v), asp: 0.35 * amp, bw: [150, 200, 250], tau: 0.015 });
+          const F = soften(d.F, soft);
+          push(dur(d.dur), { ...silent(F), voice: d.voiced ? 0.06 : 0, tau: 0.012 });
+          push(0.012, { ...silent(F), noise: 0.7 * amp, noiseF: d.noiseF * (soft ? 1.25 : 1), noiseQ: 1.2, tau: 0.012 });
+          if (!d.voiced) push(dur(0.035), { ...silent(soften(v, soft)), asp: 0.35 * amp, bw: [150, 200, 250], tau: 0.015 });
+          onset = d.voiced ? 0.96 : 1.06;
           break;
         }
       }
     });
     if (vowelIdx < 0 && ev.f0.length) f0.push([t, baseF0 * ev.f0[0]]);
-  }
+  });
   push(0.08, silent(lastF()));
   if (!f0.length) f0.push([0, baseF0]);
-  return { segs, f0, total: t };
+  return { segs, f0, total: t, base: baseF0 };
 }
 
 // ---------- Рендер ----------
@@ -214,9 +260,11 @@ class Bandpass {
   }
 }
 
+// Открытая фаза ~62% периода: у детей голосовая щель смыкается мягче и дольше,
+// чем у взрослых, поэтому голос менее «жужжащий».
 function rosenberg(ph: number) {
-  const tp = 0.4;
-  const tn = 0.16;
+  const tp = 0.42;
+  const tn = 0.2;
   if (ph < tp) return 0.5 * (1 - Math.cos((Math.PI * ph) / tp));
   if (ph < tp + tn) return Math.cos((Math.PI * (ph - tp)) / (2 * tn));
   return 0;
@@ -234,26 +282,57 @@ type RenderOpts = {
   seed: number;
 };
 
+const smoothstep = (a: number, b: number, x: number) => {
+  const u = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return u * u * (3 - 2 * u);
+};
+
+/** Контур тона по опорным точкам, сглаженный без сдвига фазы: без изломов на стыках слогов. */
+function pitchContour(plan: Plan, n: number): Float32Array {
+  const c = new Float32Array(n);
+  let fp = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / SR;
+    while (fp < plan.f0.length - 1 && t >= plan.f0[fp + 1][0]) fp++;
+    if (t <= plan.f0[0][0]) c[i] = plan.f0[0][1];
+    else if (fp >= plan.f0.length - 1) c[i] = plan.f0[plan.f0.length - 1][1];
+    else {
+      const [ta, fa] = plan.f0[fp];
+      const [tb, fb] = plan.f0[fp + 1];
+      c[i] = fa * Math.pow(fb / fa, (t - ta) / Math.max(1e-6, tb - ta));
+    }
+  }
+  const a = 1 - Math.exp(-1 / (0.025 * SR));
+  let y = c[0];
+  for (let i = 0; i < n; i++) c[i] = y += (c[i] - y) * a;
+  y = c[n - 1];
+  for (let i = n - 1; i >= 0; i--) c[i] = y += (c[i] - y) * a;
+  return c;
+}
+
 function render(plan: Plan, o: RenderOpts): Float32Array {
   const rand = rng(o.seed);
   const n = Math.ceil(plan.total * SR);
   const out = new Float32Array(n);
+  const contour = pitchContour(plan, n);
+  const flutterPh = [rand(), rand(), rand()].map((r) => r * 2 * Math.PI);
   const casc = [new Resonator(), new Resonator(), new Resonator(), new Resonator(), new Resonator()];
   const noiseBp = new Bandpass();
 
   const first = plan.segs[0];
   const F = [...first.F] as Formants;
   const BW = [...first.bw] as Formants;
-  let voice = 0, asp = 0, noise = 0;
+  let voice = 0, asp = 0, noise = 0, breathy = 0, creak = 0;
   let noiseF = first.noiseF, noiseQ = first.noiseQ;
-  let seg = 0, fp = 0;
+  let seg = 0;
   let phase = 0, gPrev = 0, tiltState = 0;
-  let periodF0 = plan.f0[0][1];
+  let periodF0 = contour[0];
   let periodAmp = 1, periodIdx = 0;
   let drift = 0;
   const aAmp = 1 - Math.exp(-1 / (0.006 * SR));
   const aNoise = 1 - Math.exp(-1 / (0.002 * SR));
-  const tiltCoef = 0.25 + 0.75 * o.tilt;
+  // Наклон спектра источника: однополюсный ФНЧ с частотой среза 1.8–6.8 кГц.
+  const tiltFc = 1800 + 5000 * o.tilt;
 
   for (let i = 0; i < n; i++) {
     const t = i / SR;
@@ -266,8 +345,34 @@ function render(plan: Plan, o: RenderOpts): Float32Array {
       F[k] += (s.F[k] - F[k]) * aF;
       BW[k] += (s.bw[k] - BW[k]) * aF;
     }
-    voice += (s.voice - voice) * aAmp;
-    asp += (s.asp - asp) * aAmp;
+    // Громкость гласной не ровная: лёгкий горб посередине, громче на высоких нотах,
+    // а перед паузой голос затухает и переходит в выдох.
+    let voiceTarget = s.voice;
+    let aspTarget = s.asp;
+    const u = (t - s.t0) / (s.t1 - s.t0);
+    if (s.vowel) {
+      const hump = s.env ? 1 : 0.85 + 0.15 * Math.sin(Math.PI * u);
+      voiceTarget *= hump * Math.max(0.7, Math.min(1.35, Math.pow(contour[i] / plan.base, 0.6)));
+      if (s.final) {
+        const off = smoothstep(0.45, 1, u);
+        voiceTarget *= 1 - 0.75 * off;
+        aspTarget += off * (0.12 + 0.3 * o.breath);
+      }
+    }
+    if (s.env === "decay") {
+      // Слог смеха: атака ~10 мс и экспоненциальное затухание.
+      const e = u < 0.08 ? u / 0.08 : Math.exp(-2.4 * (u - 0.08));
+      voiceTarget *= e;
+      aspTarget *= e;
+    } else if (s.env === "rise") {
+      const e = 0.2 + 0.8 * smoothstep(0, 0.85, u);
+      voiceTarget *= e;
+      aspTarget *= e;
+    }
+    voice += (voiceTarget - voice) * aAmp;
+    asp += (aspTarget - asp) * aAmp;
+    breathy += (s.breathy - breathy) * aAmp;
+    creak += (s.creak * smoothstep(0.3, 1, u) - creak) * aAmp;
     noise += (s.noise - noise) * aNoise;
     noiseF += (s.noiseF - noiseF) * aNoise;
     noiseQ += (s.noiseQ - noiseQ) * aNoise;
@@ -280,39 +385,38 @@ function render(plan: Plan, o: RenderOpts): Float32Array {
       noiseBp.set(noiseF * Math.min(fs, 1.15), noiseQ);
     }
 
-    // Контур основного тона.
-    while (fp < plan.f0.length - 1 && t >= plan.f0[fp + 1][0]) fp++;
-    let f0: number;
-    if (t <= plan.f0[0][0]) f0 = plan.f0[0][1];
-    else if (fp >= plan.f0.length - 1) f0 = plan.f0[plan.f0.length - 1][1];
-    else {
-      const [ta, fa] = plan.f0[fp];
-      const [tb, fb] = plan.f0[fp + 1];
-      const r = (t - ta) / Math.max(1e-6, tb - ta);
-      f0 = fa * Math.pow(fb / fa, r);
-    }
+    // Основной тон: сглаженный контур + медленный дрейф + «флаттер» Клатта —
+    // три несоизмеримые синусоиды, мелкая неровность, которой нет у машинного голоса.
+    let f0 = contour[i];
     if (o.vibratoDepth > 0) f0 *= 1 + o.vibratoDepth * Math.sin(2 * Math.PI * o.vibratoRate * t);
     if ((i & 255) === 0) drift = drift * 0.97 + gauss(rand) * 0.004;
-    f0 *= 1 + drift;
+    const flutter =
+      Math.sin(2 * Math.PI * 12.7 * t + flutterPh[0]) +
+      Math.sin(2 * Math.PI * 7.1 * t + flutterPh[1]) +
+      Math.sin(2 * Math.PI * 4.7 * t + flutterPh[2]);
+    f0 *= 1 + drift + 0.004 * flutter;
 
     // Голосовой источник.
     phase += periodF0 / SR;
     if (phase >= 1) {
       phase -= 1;
       periodIdx++;
-      periodF0 = f0 * (1 + o.jitter * gauss(rand));
-      periodAmp = Math.max(0.2, 1 + o.shimmer * gauss(rand));
-      if (o.subharmonic > 0 && periodIdx % 2) periodAmp *= 1 - o.subharmonic;
+      // Сиплость: периоды скачут по длине и громкости, через один — тише.
+      periodF0 = f0 * (1 - 0.3 * creak) * (1 + (o.jitter + 0.06 * creak) * gauss(rand));
+      periodAmp = Math.max(0.2, 1 + (o.shimmer + 0.3 * creak) * gauss(rand));
+      const sub = Math.min(0.85, o.subharmonic + 0.6 * creak);
+      if (sub > 0 && periodIdx % 2) periodAmp *= 1 - sub;
     }
     const g = rosenberg(phase);
     let src = ((g - gPrev) * SR) / (periodF0 * 10);
     gPrev = g;
-    tiltState += (src - tiltState) * tiltCoef;
-    src = tiltState * voice * periodAmp;
+    // С выдохом голос глуше: верхние гармоники уходят, остаётся шум.
+    tiltState += (src - tiltState) * (1 - Math.exp((-2 * Math.PI * tiltFc * (1 - 0.55 * breathy)) / SR));
+    src = tiltState * voice * periodAmp * (1 - 0.35 * breathy);
 
     const white = rand() * 2 - 1;
-    const openPhase = phase < 0.56 ? 1 : 0.35;
-    const aspAmt = asp + o.breath * voice * 0.22;
+    const openPhase = phase < 0.62 ? 1 : 0.35;
+    const aspAmt = asp + (o.breath * 0.22 + breathy * 1.1) * voice;
     src += white * aspAmt * (voice > 0.05 ? openPhase : 1) * 0.35;
 
     let y = src;
@@ -388,12 +492,25 @@ const LETTERS: Record<string, string[]> = {
   v: ["v"], f: ["f"], z: ["z"], s: ["s"], h: ["hh"], l: ["l"], r: ["r"], j: ["j"], w: ["w"],
 };
 const IOTATED = new Set(["е", "ё", "ю", "я"]);
-const isVowelPhone = (p: string) => PHONES[p]?.kind === "vowel";
+// Буквы, перед которыми согласный смягчается, и согласные, которые всегда твёрдые/мягкие.
+const SOFTENING = new Set(["е", "ё", "ю", "я", "и", "ь"]);
+const ALWAYS_HARD = new Set(["ж", "ш", "ц"]);
+const ALWAYS_SOFT = new Set(["ч", "щ"]);
+const DEVOICE: Record<string, string> = { b: "p", d: "t", g: "k", v: "f", z: "s", zh: "sh" };
+const VOICE: Record<string, string> = { p: "b", t: "d", k: "g", s: "z", sh: "zh" };
+const isVowelPhone = (p: string) => phoneDef(p)?.kind === "vowel";
 
-function wordToSyllables(word: string): { phones: string[]; stressed: boolean }[] {
+type WordSyl = { phones: string[]; stressed: boolean; weight: number };
+
+/** Слово → слоги с русской фонетикой: мягкость, оглушение/озвончение, аканье и иканье. */
+function wordToSyllables(word: string): WordSyl[] {
   const phones: string[] = [];
   const stressMarks: boolean[] = [];
   let prevVowelOrStart = true;
+  const nextLetter = (k: number) => {
+    while (word[k + 1] === "+") k++;
+    return word[k + 1];
+  };
   for (let k = 0; k < word.length; k++) {
     const ch = word[k];
     if (ch === "+") {
@@ -407,28 +524,61 @@ function wordToSyllables(word: string): { phones: string[]; stressed: boolean }[
     const ph = LETTERS[ch];
     if (!ph) continue;
     if (IOTATED.has(ch) && prevVowelOrStart) phones.push("j");
+    const vowel = ph.some(isVowelPhone);
+    const soft = !vowel && ch !== "й" && !ALWAYS_HARD.has(ch) && (ALWAYS_SOFT.has(ch) || SOFTENING.has(nextLetter(k)));
     for (const p of ph) {
-      phones.push(p);
-      if (isVowelPhone(p)) stressMarks.push(false);
+      phones.push(soft ? p + SOFT : p);
+      if (isVowelPhone(p)) stressMarks.push(ch === "ё"); // «ё» всегда ударная
     }
-    prevVowelOrStart = ph.some(isVowelPhone);
+    prevVowelOrStart = vowel;
   }
+
+  // Оглушение на конце слова и уподобление по звонкости: «хлеб» → [хлеп], «ложка» → [лошка], «сделать» → [зделать].
+  for (let i = phones.length - 1; i >= 0; i--) {
+    const b = baseOf(phones[i]);
+    const softMark = phones[i].endsWith(SOFT) ? SOFT : "";
+    const nb = i + 1 < phones.length ? baseOf(phones[i + 1]) : null;
+    if (DEVOICE[b] && (nb === null || VOICELESS.has(nb))) phones[i] = DEVOICE[b] + softMark;
+    else if (VOICE[b] && nb && DEVOICE[nb] && nb !== "v") phones[i] = VOICE[b] + softMark;
+  }
+
   // Деление на слоги: согласные перед гласной — её начало, хвост — к последнему слогу.
-  const syls: { phones: string[]; stressed: boolean }[] = [];
+  const syls: WordSyl[] = [];
   let cur: string[] = [];
   let vi = 0;
   for (const p of phones) {
     cur.push(p);
     if (isVowelPhone(p)) {
-      syls.push({ phones: cur, stressed: stressMarks[vi++] });
+      syls.push({ phones: cur, stressed: stressMarks[vi++], weight: 1 });
       cur = [];
     }
   }
   if (cur.length) {
     if (syls.length) syls[syls.length - 1].phones.push(...cur);
-    else syls.push({ phones: cur, stressed: false });
+    else syls.push({ phones: cur, stressed: false, weight: 1 });
   }
   if (syls.length && !syls.some((s) => s.stressed)) syls[0].stressed = true;
+
+  // Редукция безударных: в первом предударном и начальном слоге «о/а» → [а], дальше → [ə];
+  // после мягких «а/е/я» → [ɪ]. Безударные гласные ещё и заметно короче ударных.
+  const stress = syls.findIndex((s) => s.stressed);
+  syls.forEach((s, i) => {
+    const vi = s.phones.findIndex(isVowelPhone);
+    if (vi < 0) {
+      s.weight = 0;
+      return;
+    }
+    if (s.stressed) {
+      s.weight = 1.25;
+      return;
+    }
+    const strong = i === stress - 1 || (i === 0 && vi === 0);
+    const prev = s.phones[vi - 1] ?? (i > 0 ? syls[i - 1].phones.at(-1) : undefined);
+    const afterSoft = !!prev && (prev.endsWith(SOFT) || prev === "j");
+    const v = s.phones[vi];
+    if (v === "o" || v === "a" || v === "e") s.phones[vi] = afterSoft || v === "e" ? "I" : strong ? "a" : "@";
+    s.weight = strong ? 0.8 : 0.6;
+  });
   return syls;
 }
 
@@ -443,26 +593,27 @@ function textEvents(text: string): Ev[] {
     const question = punct.includes("?");
     const exclaim = punct.includes("!");
     let idx = 0;
-    sylls.forEach((w, wi) => {
-      w.forEach((s) => {
+    // Слова внутри фразы звучат слитно, без пауз — паузы только на знаках препинания.
+    sylls.forEach((w) => {
+      w.forEach((s, si) => {
         const decl = 1 - 0.14 * (idx / Math.max(1, total - 1));
         const lift = exclaim ? 1.1 : 1;
         const last = idx === total - 1;
         let f0: number[];
         if (last && question) f0 = [decl, decl * 1.12, decl * 1.4];
+        else if (last && s.stressed) f0 = [decl * lift * 1.04, decl * lift * (exclaim ? 1.2 : 1.08), decl * 0.84];
+        else if (last) f0 = [decl * 0.94, decl * 0.84];
         else if (s.stressed) f0 = [decl * lift, decl * lift * (exclaim ? 1.3 : 1.16), decl * lift * 1.02];
         else f0 = [decl * lift * 0.98, decl * lift * 0.95];
-        const hasVowel = s.phones.some(isVowelPhone);
         events.push({
           type: "syl",
           phones: s.phones,
           f0,
-          dur: (s.stressed ? 1.35 : 0.95) * (last ? 1.4 : 1) * (hasVowel ? 1 : 0),
-          amp: s.stressed ? 1 : 0.8,
+          dur: s.weight * (last ? 1.4 : si === w.length - 1 ? 1.08 : 1),
+          amp: s.stressed ? 1 : 0.78,
         });
         idx++;
       });
-      if (wi < sylls.length - 1) events.push({ type: "pause", dur: 0.035 });
     });
     if (punct) events.push({ type: "pause", dur: /[.!?…]/.test(punct) ? 0.38 : 0.18 });
   }
@@ -475,27 +626,49 @@ function pick<T>(rand: () => number, arr: T[]): T {
   return arr[Math.floor(rand() * arr.length)];
 }
 
+// Смех по данным акустики (Bachorowski и др., 2001): серия коротких «ха» на выдохе
+// ~4–5 в секунду (хихиканье быстрее), каждое с резкой атакой и затуханием. Высота
+// скачет от слога к слогу и в целом падает, часть слогов — просто выдох без голоса,
+// последний тянется и сипнет, а после серии — шумный судорожный вдох.
 function laughEvents(rand: () => number, giggle: boolean): Ev[] {
   const ev: Ev[] = [];
-  const bursts = giggle ? 2 : 1 + Math.floor(rand() * 2);
-  for (let b = 0; b < bursts; b++) {
-    const n = (giggle ? 5 : 4) + Math.floor(rand() * 4);
-    const vowel = giggle ? pick(rand, ["i", "i", "e"]) : pick(rand, ["a", "a", "e", "o"]);
-    const top = giggle ? 1.45 : 1.25 + rand() * 0.15;
+  const bouts = giggle ? 2 + Math.floor(rand() * 2) : 1 + Math.floor(rand() * 2);
+  for (let b = 0; b < bouts; b++) {
+    const n = 4 + Math.floor(rand() * 4);
+    const top = giggle ? 1.5 + rand() * 0.25 : 1.3 + rand() * 0.2;
+    const vowel = giggle ? pick(rand, ["i", "I"]) : pick(rand, ["a", "a", "@"]);
+    // Хихиканье часто начинается с закрытым ртом: «хм-хм» и только потом «хи-хи».
+    const hums = giggle && rand() < 0.65 ? 1 + Math.floor(rand() * 2) : 0;
     for (let k = 0; k < n; k++) {
       const p = k / Math.max(1, n - 1);
-      const f = top - p * (giggle ? 0.25 : 0.35) + (rand() - 0.5) * 0.06;
-      ev.push({
-        type: "syl",
-        phones: ["hh", vowel],
-        f0: [f * 1.02, f, f * 0.96],
-        dur: (giggle ? 0.45 : 0.62) * (0.9 + rand() * 0.2),
-        amp: 1 - p * 0.4,
-      });
-      ev.push({ type: "pause", dur: giggle ? 0.025 : 0.04 });
+      const last = k === n - 1;
+      const f = top * (1 - (giggle ? 0.22 : 0.35) * p) * (1 + 0.07 * gauss(rand));
+      const amp = (1 - 0.45 * p) * (0.8 + 0.4 * rand());
+      if (k > 0 && !last && rand() < (giggle ? 0.12 : 0.22)) {
+        ev.push({ type: "breath", dur: (giggle ? 0.07 : 0.1) * (0.8 + 0.4 * rand()), amp: 0.5 * amp, vowel: giggle ? "I" : "@", env: "decay" });
+      } else {
+        ev.push({
+          type: "syl",
+          phones: ["hh", k < hums ? "M" : vowel],
+          f0: last ? [f * 1.05, f * 0.95, f * 0.78] : [f * 1.04, f, f * 0.9],
+          dur: (giggle ? 0.5 : 0.7) * (0.8 + 0.4 * rand()) * (last ? 1.9 : 1),
+          amp,
+          breathy: (giggle ? 0.4 : 0.55) + 0.2 * rand(),
+          creak: last ? 0.6 : 0,
+          env: "decay",
+        });
+      }
+      // Шаг между слогами неровный: серия сначала разгоняется, к концу замедляется.
+      const gap = giggle ? 0.03 : 0.05;
+      ev.push({ type: "pause", dur: gap * (0.6 + 0.8 * rand()) * (1 - 0.3 * Math.sin(Math.PI * p)) });
     }
-    ev.push({ type: "breath", dur: giggle ? 0.22 : 0.32, amp: 0.25, vowel: "i" });
-    ev.push({ type: "pause", dur: 0.08 });
+    // Вдох после серии: шум нарастает, у хихиканья иногда с тонким писком.
+    if (giggle && rand() < 0.5) {
+      ev.push({ type: "syl", phones: ["I"], f0: [1.9, 2.1], dur: 1.6, amp: 0.18, breathy: 1, env: "rise" });
+    } else {
+      ev.push({ type: "breath", dur: (giggle ? 0.22 : 0.32) * (0.8 + 0.4 * rand()), amp: 0.22, vowel: "I", env: "rise" });
+    }
+    ev.push({ type: "pause", dur: 0.05 + rand() * 0.12 });
   }
   return ev;
 }
@@ -676,7 +849,8 @@ export function synthesizeBaby(p: BabyParams): Clip {
       events = textEvents(p.text || "агу");
   }
 
-  const plan = buildPlan(events, age.f0 * p.pitch, tempo, expr);
+  // В песенке ритм должен совпадать с мелодией, поэтому разброс длительностей меньше.
+  const plan = buildPlan(events, age.f0 * p.pitch, tempo, expr, rand, p.vocalization === "sing" ? 0.02 : 0.08);
   let x = render(plan, o);
   x = applyBiquad(x, biquad("highpass", 90, SR));
   normalize(x, 0.8);

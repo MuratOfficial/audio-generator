@@ -6,7 +6,7 @@
 // 3. Каждое зерно ещё и сжимается во времени — это поднимает форманты
 //    (эффект «короткого речевого тракта»), не трогая высоту.
 
-import { applyBiquad, biquad, type Clip, fadeEdges, normalize, sampleAt } from "./core";
+import { applyBiquad, biquad, type Clip, fadeEdges, normalize, rng, sampleAt } from "./core";
 
 // ---------- Оценка основного тона (YIN) ----------
 
@@ -204,33 +204,52 @@ export function transformToChild(clip: Clip, p: ChildVoiceParams, track = trackP
   const out = new Float32Array(outLen);
   const fs = p.formant;
 
+  const rand = rng(17);
+  const noiseHalf = sr * 0.004;
+
+  // Зерно: окно Ханна полушириной half (в выходных отсчётах) вокруг pos,
+  // источник читается с шагом fs — так форманты сдвигаются вверх.
+  const addGrain = (center: number, pos: number, half: number, gain: number) => {
+    const L = Math.ceil(half);
+    for (let j = -L; j <= L; j++) {
+      const idx = center + j;
+      if (idx < 0 || idx >= outLen || Math.abs(j) >= half) continue;
+      const w = 0.5 * (1 + Math.cos((Math.PI * j) / half));
+      out[idx] += sampleAt(x, pos + j * fs) * w * gain;
+    }
+  };
+  const outPeriodFor = (f0: number) => sr / (p.targetPitch * Math.pow(f0 / median, p.expressiveness));
+
   let ts = 0;
   let k = 0;
   while (ts < outLen - sr && marks.length) {
     const ta = ts * p.speed;
-    while (k < marks.length - 1 && Math.abs(marks[k + 1].pos - ta) <= Math.abs(marks[k].pos - ta)) k++;
-    const m = marks[k];
-
-    let outPeriod: number;
-    if (m.voiced) {
-      const rel = m.f0 / median;
-      const f0out = p.targetPitch * Math.pow(rel, p.expressiveness);
-      outPeriod = sr / f0out;
-    } else {
-      outPeriod = m.period / fs;
-    }
-
-    // Зерно: два периода с окном Ханна, сжатое в fs раз для сдвига формант.
-    const half = m.period / fs;
-    const L = Math.ceil(half);
-    const gain = Math.min(1.5, outPeriod / half);
+    while (k < marks.length - 1 && marks[k + 1].pos <= ta) k++;
+    const a = marks[k];
+    const b = marks[Math.min(k + 1, marks.length - 1)];
+    const frac = b.pos > a.pos ? Math.max(0, Math.min(1, (ta - a.pos) / (b.pos - a.pos))) : 0;
     const center = Math.round(ts);
-    for (let j = -L; j <= L; j++) {
-      const idx = center + j;
-      if (idx < 0 || idx >= outLen) continue;
-      const w = 0.5 * (1 + Math.cos((Math.PI * j) / half));
-      if (Math.abs(j) >= half) continue;
-      out[idx] += sampleAt(x, m.pos + j * fs) * w * gain;
+    let outPeriod: number;
+
+    if (a.voiced && b.voiced) {
+      // При повышении тона одно и то же зерно повторялось бы 2–3 раза подряд —
+      // отсюда «металл». Смешиваем два соседних импульса по положению между ними.
+      outPeriod = outPeriodFor(a.f0 + (b.f0 - a.f0) * frac);
+      const halfA = a.period / fs;
+      const halfB = b.period / fs;
+      addGrain(center, a.pos, halfA, Math.min(1.5, outPeriod / halfA) * (1 - frac));
+      addGrain(center, b.pos, halfB, Math.min(1.5, outPeriod / halfB) * frac);
+    } else if ((frac < 0.5 ? a : b).voiced) {
+      const m = frac < 0.5 ? a : b;
+      outPeriod = outPeriodFor(m.f0);
+      const half = m.period / fs;
+      addGrain(center, m.pos, half, Math.min(1.5, outPeriod / half));
+    } else {
+      // Шумные согласные: случайный шаг и случайная точка чтения, иначе зёрна
+      // складываются с постоянным периодом и «с», «ш», «х» начинают гудеть.
+      // Зёрна шума некогерентны, поэтому громкость сохраняем по мощности.
+      outPeriod = noiseHalf * (0.5 + 0.5 * rand());
+      addGrain(center, ta + (rand() - 0.5) * noiseHalf * 2, noiseHalf, Math.sqrt((4 * outPeriod) / (3 * noiseHalf)));
     }
     ts += Math.max(2, outPeriod);
   }

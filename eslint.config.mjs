@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Сгенерированные WASM-обвязки, копируются scripts/copy-wasm.mjs.
+    "public/wasm/**",
   ]),
 ]);
 
