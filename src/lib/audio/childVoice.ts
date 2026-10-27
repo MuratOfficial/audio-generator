@@ -149,9 +149,10 @@ export function presetParams(preset: ChildPreset, sourceMedian: number): ChildVo
   };
 }
 
-type Mark = { pos: number; period: number; voiced: boolean; f0: number };
+export type Mark = { pos: number; period: number; voiced: boolean; f0: number };
 
-function analysisMarks(x: Float32Array, sr: number, track: PitchTrack): Mark[] {
+/** Метки голосовых импульсов (и равномерные метки на шумных участках) для PSOLA. */
+export function analysisMarks(x: Float32Array, sr: number, track: PitchTrack): Mark[] {
   const marks: Mark[] = [];
   const unvoicedPeriod = Math.round(sr * 0.005);
   let t = 0;
@@ -196,15 +197,24 @@ function analysisMarks(x: Float32Array, sr: number, track: PitchTrack): Mark[] {
   return marks;
 }
 
-export function transformToChild(clip: Clip, p: ChildVoiceParams, track = trackPitch(clip)): Clip {
-  const { samples: x, sampleRate: sr } = clip;
-  const marks = analysisMarks(x, sr, track);
-  const median = track.median || 200;
-  const outLen = Math.ceil(x.length / p.speed) + sr;
+/**
+ * TD-PSOLA. Для каждой выходной точки ts: srcAt — где читать источник (отсчёты, можно
+ * и назад — так тянутся гласные), periodAt — период на выходе для голосового участка.
+ * formant > 1 поднимает форманты, не трогая высоту.
+ */
+export function psola(
+  x: Float32Array,
+  sr: number,
+  marks: Mark[],
+  outLen: number,
+  srcAt: (ts: number) => number,
+  periodAt: (ts: number, srcF0: number) => number,
+  formant = 1,
+  seed = 17,
+): Float32Array {
   const out = new Float32Array(outLen);
-  const fs = p.formant;
-
-  const rand = rng(17);
+  const fs = formant;
+  const rand = rng(seed);
   const noiseHalf = sr * 0.004;
 
   // Зерно: окно Ханна полушириной half (в выходных отсчётах) вокруг pos,
@@ -218,13 +228,12 @@ export function transformToChild(clip: Clip, p: ChildVoiceParams, track = trackP
       out[idx] += sampleAt(x, pos + j * fs) * w * gain;
     }
   };
-  const outPeriodFor = (f0: number) => sr / (p.targetPitch * Math.pow(f0 / median, p.expressiveness));
-
   let ts = 0;
   let k = 0;
-  while (ts < outLen - sr && marks.length) {
-    const ta = ts * p.speed;
+  while (ts < outLen && marks.length) {
+    const ta = srcAt(ts);
     while (k < marks.length - 1 && marks[k + 1].pos <= ta) k++;
+    while (k > 0 && marks[k].pos > ta) k--;
     const a = marks[k];
     const b = marks[Math.min(k + 1, marks.length - 1)];
     const frac = b.pos > a.pos ? Math.max(0, Math.min(1, (ta - a.pos) / (b.pos - a.pos))) : 0;
@@ -234,14 +243,14 @@ export function transformToChild(clip: Clip, p: ChildVoiceParams, track = trackP
     if (a.voiced && b.voiced) {
       // При повышении тона одно и то же зерно повторялось бы 2–3 раза подряд —
       // отсюда «металл». Смешиваем два соседних импульса по положению между ними.
-      outPeriod = outPeriodFor(a.f0 + (b.f0 - a.f0) * frac);
+      outPeriod = periodAt(ts, a.f0 + (b.f0 - a.f0) * frac);
       const halfA = a.period / fs;
       const halfB = b.period / fs;
       addGrain(center, a.pos, halfA, Math.min(1.5, outPeriod / halfA) * (1 - frac));
       addGrain(center, b.pos, halfB, Math.min(1.5, outPeriod / halfB) * frac);
     } else if ((frac < 0.5 ? a : b).voiced) {
       const m = frac < 0.5 ? a : b;
-      outPeriod = outPeriodFor(m.f0);
+      outPeriod = periodAt(ts, m.f0);
       const half = m.period / fs;
       addGrain(center, m.pos, half, Math.min(1.5, outPeriod / half));
     } else {
@@ -253,8 +262,21 @@ export function transformToChild(clip: Clip, p: ChildVoiceParams, track = trackP
     }
     ts += Math.max(2, outPeriod);
   }
+  return out;
+}
 
-  let y: Float32Array = out.subarray(0, Math.ceil(x.length / p.speed));
+export function transformToChild(clip: Clip, p: ChildVoiceParams, track = trackPitch(clip)): Clip {
+  const { samples: x, sampleRate: sr } = clip;
+  const median = track.median || 200;
+  let y = psola(
+    x,
+    sr,
+    analysisMarks(x, sr, track),
+    Math.ceil(x.length / p.speed),
+    (ts) => ts * p.speed,
+    (_, f0) => sr / (p.targetPitch * Math.pow(f0 / median, p.expressiveness)),
+    p.formant,
+  );
   y = applyBiquad(y, biquad("highpass", 110, sr));
   if (p.brightness) y = applyBiquad(y, biquad("highshelf", 3000, sr, 0.7, p.brightness));
   normalize(y, 0.9);

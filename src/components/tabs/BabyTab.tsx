@@ -4,9 +4,10 @@ import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { AGES, type BabyAge, type BabyParams, DEFAULT_BABY, synthesizeBaby, VOCALIZATIONS } from "@/lib/audio/babySynth";
 import { type PitchTrack, trackPitch, transformToChild } from "@/lib/audio/childVoice";
 import { type Clip, normalize, playClip, reverb } from "@/lib/audio/core";
-import { PIPER_VOICES, speakPiper, storedVoices } from "@/lib/tts/piper";
+import { PIPER_VOICES } from "@/lib/tts/piper";
 import { AudioResult } from "../AudioResult";
-import { Button, Card, ChoiceGrid, Field, Notice, ProgressBar, SectionTitle, Segmented, Select, Slider, Textarea } from "../ui";
+import { PiperStatus, PiperVoiceSelect, usePiper } from "../Piper";
+import { Button, Card, ChoiceGrid, Field, Notice, SectionTitle, Segmented, Slider, Textarea } from "../ui";
 
 const EXAMPLES = ["Мама, папа! Дай ням-ням. Агу?", "Ой! Ку-ку! Где мама?", "Баба, дай мячик!", "Привет! Я малыш.", "Пока-пока!"];
 
@@ -66,14 +67,8 @@ export function BabyTab() {
 
   // ---------- Нейросеть ----------
   const [voiceId, setVoiceId] = useState(PIPER_VOICES[0].id);
-  const [stored, setStored] = useState<string[]>([]);
-  const [status, setStatus] = useState<{ kind: "idle" | "download" | "synth" } | { kind: "error"; message: string }>({ kind: "idle" });
-  const [progress, setProgress] = useState(0);
+  const piper = usePiper();
   const [speech, setSpeech] = useState<Speech | null>(null);
-
-  useEffect(() => {
-    void storedVoices().then(setStored);
-  }, []);
 
   // Превращение в детский голос занимает десятки миллисекунд; отложенные настройки не дают ползункам «залипать».
   const { age, pitch, vocalTract, tempo, expressiveness, room } = useDeferredValue(p);
@@ -82,30 +77,16 @@ export function BabyTab() {
     [speech, age, pitch, vocalTract, tempo, expressiveness, room],
   );
 
-  const busy = status.kind === "download" || status.kind === "synth";
-  const voiceMeta = PIPER_VOICES.find((v) => v.id === voiceId)!;
   const text = plainText(p.text);
   const stale = !!speech && (speech.text !== text || speech.voiceId !== voiceId);
 
   const speak = async () => {
     if (!text) return;
-    setStatus({ kind: stored.includes(voiceId) ? "synth" : "download" });
-    setProgress(0);
-    try {
-      const clip = await speakPiper(text, voiceId, ({ loaded, total }) => {
-        setStatus({ kind: "download" });
-        if (total) setProgress(loaded / total);
-        if (loaded >= total) setStatus({ kind: "synth" });
-      });
-      const next = { text, voiceId, clip, track: trackPitch(clip) };
-      setSpeech(next);
-      setStatus({ kind: "idle" });
-      playClip(childFromSpeech(next, p));
-      setStored(await storedVoices());
-    } catch (e) {
-      console.error(e);
-      setStatus({ kind: "error", message: e instanceof Error ? e.message : String(e) });
-    }
+    const clip = await piper.speak(text, voiceId);
+    if (!clip) return;
+    const next = { text, voiceId, clip, track: trackPitch(clip) };
+    setSpeech(next);
+    playClip(childFromSpeech(next, p));
   };
 
   const clip = neural ? neuralClip : synthClip;
@@ -171,24 +152,7 @@ export function BabyTab() {
                 </div>
               </div>
               {neural && (
-                <Field
-                  label="Исходный голос"
-                  hint={
-                    stored.includes(voiceId)
-                      ? "Модель уже скачана."
-                      : `При первом запуске скачается модель голоса (~${voiceMeta.sizeMb} МБ), дальше работает без загрузки. Лучше всего подходит женский голос.`
-                  }
-                >
-                  {(props) => (
-                    <Select {...props} value={voiceId} onChange={(e) => setVoiceId(e.target.value)}>
-                      {PIPER_VOICES.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {`${v.label} — ${v.lang === "ru" ? "русский" : "английский"}, ${v.gender === "f" ? "жен." : "муж."}${stored.includes(v.id) ? " ✓" : ""}`}
-                        </option>
-                      ))}
-                    </Select>
-                  )}
-                </Field>
+                <PiperVoiceSelect value={voiceId} onChange={setVoiceId} stored={piper.stored} hint="Лучше всего подходит женский голос." />
               )}
             </div>
           )}
@@ -197,8 +161,8 @@ export function BabyTab() {
         <Card>
           <div className="mb-4 flex flex-wrap items-center gap-3">
             {neural ? (
-              <Button variant="gradient" onClick={speak} loading={busy} disabled={!text}>
-                {status.kind === "download" ? "Скачиваю голос" : status.kind === "synth" ? "Синтезирую" : "▶ Озвучить"}
+              <Button variant="gradient" onClick={speak} loading={piper.busy} disabled={!text}>
+                {piper.label}
               </Button>
             ) : (
               <>
@@ -209,23 +173,8 @@ export function BabyTab() {
               </>
             )}
           </div>
-          {neural && status.kind === "download" && (
-            <div className="mb-4">
-              <ProgressBar value={progress} />
-              <p className="mt-1 text-xs text-muted">Загрузка модели: {Math.round(progress * 100)}% из ~{voiceMeta.sizeMb} МБ</p>
-            </div>
-          )}
-          {neural && status.kind === "synth" && (
-            <p className="mb-4 text-xs text-muted">Первый запуск дольше: браузер загружает и компилирует движок нейросети.</p>
-          )}
-          {neural && status.kind === "error" && (
-            <div className="mb-4">
-              <Notice tone="error">
-                Не получилось синтезировать речь: {status.message}. Попробуйте ещё раз или переключитесь на синтезатор.
-              </Notice>
-            </div>
-          )}
-          {neural && stale && !busy && (
+          {neural && <PiperStatus piper={piper} voiceId={voiceId} />}
+          {neural && stale && !piper.busy && (
             <p className="mb-3 text-xs text-muted">Текст или голос изменились — нажмите «Озвучить», чтобы услышать новый вариант.</p>
           )}
           {clip ? (

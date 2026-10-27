@@ -93,8 +93,8 @@ export type Syl = {
   env?: Env;
 };
 // decay — резкая атака и быстрое затухание (слог смеха), rise — нарастание (судорожный вдох).
-type Env = "decay" | "rise";
-type Ev = Syl | { type: "pause"; dur: number } | { type: "breath"; dur: number; amp: number; vowel: string; env?: Env };
+export type Env = "decay" | "rise";
+export type Ev = Syl | { type: "pause"; dur: number } | { type: "breath"; dur: number; amp: number; vowel: string; env?: Env };
 
 type Seg = {
   t0: number;
@@ -116,7 +116,7 @@ type Seg = {
 
 type Plan = { segs: Seg[]; f0: [number, number][]; total: number; base: number };
 
-const VOWEL_BASE_DUR = 0.15;
+export const VOWEL_BASE_DUR = 0.15;
 
 // Мягкий согласный помечается апострофом: «д'» в «дядя».
 const SOFT = "'";
@@ -793,11 +793,31 @@ function singEvents(rand: () => number): Ev[] {
 
 // ---------- Публичный API ----------
 
+/** Сценарий вокализации (слоги, паузы, вдохи) — общий для синтезатора и клонирования голоса. */
+export function vocalEvents(kind: Exclude<Vocalization, "text">, rand: () => number): Ev[] {
+  switch (kind) {
+    case "laugh":
+      return laughEvents(rand, false);
+    case "giggle":
+      return laughEvents(rand, true);
+    case "cry":
+      return cryEvents(rand);
+    case "coo":
+      return cooEvents(rand);
+    case "babble":
+      return babbleEvents(rand);
+    case "surprise":
+      return surpriseEvents(rand);
+    case "sing":
+      return singEvents(rand);
+  }
+}
+
 export function synthesizeBaby(p: BabyParams): Clip {
   const age = AGES[p.age];
   const rand = rng(p.seed * 7919 + p.vocalization.length);
   const tempo = age.tempo * p.tempo;
-  let events: Ev[];
+  const events = p.vocalization === "text" ? textEvents(p.text || "агу") : vocalEvents(p.vocalization, rand);
   let expr = p.expressiveness;
   const o: RenderOpts = {
     formantScale: age.formant * p.vocalTract,
@@ -813,15 +833,12 @@ export function synthesizeBaby(p: BabyParams): Clip {
 
   switch (p.vocalization) {
     case "laugh":
-      events = laughEvents(rand, false);
       o.breath = Math.max(o.breath, 0.45);
       break;
     case "giggle":
-      events = laughEvents(rand, true);
       o.breath = Math.max(o.breath, 0.5);
       break;
     case "cry":
-      events = cryEvents(rand);
       o.tilt = 0.95;
       o.jitter += 0.02;
       o.subharmonic = Math.min(0.6, o.subharmonic + 0.25);
@@ -829,24 +846,16 @@ export function synthesizeBaby(p: BabyParams): Clip {
       o.vibratoDepth = 0.02;
       break;
     case "coo":
-      events = cooEvents(rand);
       o.tilt = 0.35;
       break;
-    case "babble":
-      events = babbleEvents(rand);
-      break;
     case "surprise":
-      events = surpriseEvents(rand);
       expr *= 1.2;
       break;
     case "sing":
-      events = singEvents(rand);
       expr = 1;
       o.vibratoDepth = 0.012;
       o.tilt = 0.55;
       break;
-    default:
-      events = textEvents(p.text || "агу");
   }
 
   // В песенке ритм должен совпадать с мелодией, поэтому разброс длительностей меньше.

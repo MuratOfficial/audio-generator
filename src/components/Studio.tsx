@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import { AppShell, Backdrop, PageHint, ThemeToggle } from "@toimetdev/pathlogs-core";
 import { Library, LibraryProvider } from "./AudioResult";
 import { BabyTab } from "./tabs/BabyTab";
+import { MyVoiceTab } from "./tabs/MyVoiceTab";
 import { SfxTab } from "./tabs/SfxTab";
 import { ToysTab } from "./tabs/ToysTab";
 import { TtsTab } from "./tabs/TtsTab";
@@ -13,6 +14,7 @@ const TABS = [
   { id: "baby", group: "Голоса", label: "Голос малыша", emoji: "👶", desc: "Синтез детского голоса с нуля: слова, смех, лепет, плач, песенки.", Component: BabyTab },
   { id: "tts", group: "Голоса", label: "Текст → детский голос", emoji: "💬", desc: "Нейросеть читает текст, а мы превращаем голос в детский.", Component: TtsTab },
   { id: "changer", group: "Голоса", label: "Изменить голос", emoji: "🎙️", desc: "Ваша запись или файл — голосом ребёнка.", Component: VoiceChangerTab },
+  { id: "myvoice", group: "Голоса", label: "Голос по образцу", emoji: "🦜", desc: "По записи голоса — смех, плач, лепет, песенка и слова тем же голосом.", Component: MyVoiceTab },
   { id: "toys", group: "Звуки", label: "Игрушки", emoji: "🧸", desc: "Ксилофон, погремушка, пищалка, пузырьки и другие.", Component: ToysTab },
   { id: "sfx", group: "Звуки", label: "Звуковые эффекты", emoji: "🎮", desc: "Монетки, прыжки, бонусы и взрывы для игр.", Component: SfxTab },
 ] as const;
